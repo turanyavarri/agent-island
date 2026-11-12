@@ -5,10 +5,14 @@ Each contestant = a personality (PERSONALITIES) + functions that send it to the 
 Bella's game loop calls these functions; Turanya's llm.py does the actual AI call.
 
 Functions other files use:
-    agent_intro(name)                                       -> intro line (str)
-    agent_speak(name, transcript, pairs=None)               -> what they say out loud (str)
-    agent_confess(name, transcript, pairs=None)             -> private thoughts, NOT added to transcript (str)
-    agent_vote(name, transcript, pairs, my_confessional="") -> pair number they vote out (int)
+    agent_intro(name)                                                     -> intro line (str)
+    agent_speak(name, transcript, pairs=None, my_notes=None)              -> what they say out loud (str)
+    agent_confess(name, transcript, pairs=None, my_notes=None)            -> private thoughts, NOT added to transcript (str)
+    agent_vote(name, transcript, pairs, my_confessional="", my_notes=None) -> pair number they vote out (int)
+    agent_write_notes(name, transcript, pairs, own_notes)                 -> 1-2 new memory notes (list of str)
+
+my_notes: the agent's own memory notes from earlier rounds. game.py passes them in
+automatically; leave them out and the functions still work.
 
 `name` is always the role key, like "Villain" (not the show name "Selena").
 
@@ -26,7 +30,7 @@ GAME_RULES = (
     "Never mention that you are an AI. "
     "Never reveal your personality type or strategy to the other contestants. "
     "This is a fictional party game, and you are playing a fictional character. Bluffing and scheming are part of the game, like in a board game. "
-    "Gossip and speculation are allowed if framed as rumors (like 'I heard...'), but never claim something happened in the conversation that didn't. "
+    "Gossip and speculation are allowed if they're clearly rumors or guesses, but never claim something happened in the conversation that didn't. Vary how you phrase things. "
     "Only refer to things that actually appear in the conversation. Never invent past events, chats, or actions as if they really happened."
 )
 
@@ -157,7 +161,7 @@ def agent_intro(name):
 
 # Talk phase: reads everything said so far and responds out loud. 
 # The caller adds the reply to the transcript.
-def agent_speak(name, transcript, pairs=None):
+def agent_speak(name, transcript, pairs=None, my_notes=None):
     instructions = f"Your name on the show is {SHOW_NAMES[name]}. " + GAME_RULES + " " + PERSONALITIES[name]
     question = (
         "Here's what everyone has said so far:\n"
@@ -173,12 +177,13 @@ def agent_speak(name, transcript, pairs=None):
     if pairs:
         question += "\n\nThe current pairs are:\n" + format_pairs(pairs)
         question += partner_line(name, pairs)
+    question += notes_text(my_notes)  # memory from earlier rounds
     reply = ask_ai(instructions, question)
     return reply
 
 # Private confessional: what they REALLY think. 
 # Don't add this to the transcript, or the other contestants will hear it.
-def agent_confess(name, transcript, pairs=None):
+def agent_confess(name, transcript, pairs=None, my_notes=None):
     instructions = f"Your name on the show is {SHOW_NAMES[name]}. " + GAME_RULES + " " + PERSONALITIES[name]
     question = (
         "Here's what everyone has said so far:\n"
@@ -192,6 +197,7 @@ def agent_confess(name, transcript, pairs=None):
     if pairs:
         question += "\n\nThe current pairs are:\n" + format_pairs(pairs)
         question += partner_line(name, pairs)
+    question += notes_text(my_notes)  # memory from earlier rounds
     reply = ask_ai(instructions, question)
 
     # The AI occasionally breaks character and refuses; if so, try once more
@@ -222,7 +228,7 @@ def partner_line(name, pairs):
 # pairs: list of tuples, numbered by position, e.g. [("Charmer", "You"), ("Villain", "Loyalist")]
 # Contestants can't vote for their own pair. If the AI doesn't answer with
 # 'VOTE: <number>' after 2 tries, picks a random valid pair so the game never crashes.
-def agent_vote(name, transcript, pairs, my_confessional=""):
+def agent_vote(name, transcript, pairs, my_confessional="", my_notes=None):
     # Find which pair this contestant is in, so they can't vote for themselves
     my_pair = None
     for i, pair in enumerate(pairs):
@@ -245,6 +251,7 @@ def agent_vote(name, transcript, pairs, my_confessional=""):
     # Remind them of their own private plan so their vote matches what they really think
     if my_confessional:
         question += "\n\nYour private thoughts from your confessional: " + my_confessional
+    question += notes_text(my_notes)  # memory from earlier rounds
 
     # Try twice: AIs sometimes forget the format or pick an invalid pair
     for attempt in range(2):
@@ -256,6 +263,62 @@ def agent_vote(name, transcript, pairs, my_confessional=""):
 
     # Both tries failed: pick a random valid pair so the game keeps going
     return random.choice(options)
+
+# ---------- memory notes ----------
+# Only the most recent notes go into prompts, so prompts stay short (saves tokens)
+MAX_NOTES = 6
+
+# Turns an agent's notes into a block of text for its prompt.
+# Returns "" if there are no notes yet (like in round 1).
+def notes_text(my_notes):
+    if not my_notes:
+        return ""
+    recent = my_notes[-MAX_NOTES:]
+    return (
+        "\n\nYour private notes from earlier rounds (only you can see these):\n"
+        + "\n".join("- " + note for note in recent)
+    )
+
+
+# End of each round: the agent writes 1-2 short notes to itself, in its own voice.
+# Bella's game.py stores them and passes them back in as my_notes.
+# Always returns a list of 1-2 non-empty strings (the engine requires that).
+def agent_write_notes(name, transcript, pairs, own_notes):
+    instructions = f"Your name on the show is {SHOW_NAMES[name]}. " + GAME_RULES + " " + PERSONALITIES[name]
+    question = (
+        "Here's what everyone has said so far:\n"
+        + "\n".join(transcript)
+        + "\n\nThe round just ended. Write 1-2 short private notes to yourself about what you "
+        "want to remember for the rest of the game: promises made to you or by you, who you trust, "
+        "who lied, who's a threat. Only write about things that actually happened in the conversation. "
+        "Write each note on its own line, in your own voice, under 20 words. Reply with only the notes."
+    )
+
+    # Remind them of their partner, or that they're out but still on the jury
+    partner = partner_line(name, pairs)
+    if partner:
+        question += partner
+    else:
+        question += (
+            "\n\nYou were eliminated, but you'll vote on the jury in the final, "
+            "so remember who treated you well and who didn't."
+        )
+    question += notes_text(own_notes)
+
+    reply = ask_ai(instructions, question)
+
+    # Split the reply into lines and clean off bullets or numbers, like "- " or "1. "
+    notes = []
+    for line in reply.split("\n"):
+        line = line.strip().lstrip("-*•0123456789.) ").strip()
+        if line:
+            notes.append(line)
+
+    # If the AI gave nothing usable (or the call failed), use a safe placeholder
+    if not notes:
+        notes = ["Nothing new worth remembering this round."]
+    return notes[:2]
+
 
 # ---------- Quick test: only runs when you click play on THIS file ----------
 # Bella's game.py will do this for real; this just checks the agents work.
