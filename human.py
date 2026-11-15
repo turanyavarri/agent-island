@@ -14,6 +14,10 @@ from agents import SHOW_NAMES
 
 HUMAN_NAME = "You"
 
+# Flip to True once ranked agent_vote() is pushed. Counter
+# needs every ballot in a round to use the same format (all numbers or all lists).
+RANKED_VOTES = True
+
 
 def show_name(role):
     """Role key -> name the player sees. "You" stays "You"."""
@@ -52,6 +56,22 @@ def is_valid_vote(choice, pair_options, my_pair):
     """Vote must be a pair number on the ballot, and not your own pair."""
     return choice.isdigit() and int(choice) in pair_options and int(choice) != my_pair
 
+def parse_ranking(text):
+    """ "2, 0" or "2 0" -> [2, 0]. Returns None if it isn't all numbers."""
+    parts = text.replace(",", " ").split()
+    if not parts or not all(p.isdigit() for p in parts):
+        return None
+    return [int(p) for p in parts]
+
+
+def is_valid_ranking(ranking, pair_options, my_pair):
+    """A ranking must list every pair on the ballot except yours, each exactly once."""
+    allowed = [p for p in pair_options if p != my_pair]
+    return (
+        ranking is not None
+        and len(ranking) == len(allowed)
+        and set(ranking) == set(allowed)
+    )
 
 # ---------- turns (these ask you to type) ----------
 
@@ -78,18 +98,42 @@ def human_pick_partner(players):
 def human_vote(pair_options, my_pair, pairs=None):
     """pair_options: pair numbers on the ballot. my_pair: your pair number.
     pairs (optional): the pairs list, so the ballot can show who's in each pair.
-    Returns one pair number (ranked voting comes Friday).
+
+    Returns a ranked list like [2, 0] (most-wanted-out first) when RANKED_VOTES
+    is on, otherwise a single pair number.
     """
     allowed = [p for p in pair_options if p != my_pair]
+
     if pairs:
         print("Who should go home?")
         for p in allowed:
             print(f"  {p}: {format_pair(pairs[p])}")
+
+    # Only one pair to vote for: no need to ask
+    if len(allowed) == 1:
+        print(f"Only one pair to vote for, so your vote goes to pair {allowed[0]}.")
+        return [allowed[0]] if RANKED_VOTES else allowed[0]
+
+    if not RANKED_VOTES:
+        while True:
+            choice = input(f"Vote for a pair {allowed}: ").strip()
+            if is_valid_vote(choice, pair_options, my_pair):
+                return int(choice)
+            print("That's not a valid pair, try again.")
+
     while True:
-        choice = input(f"Vote for a pair {allowed}: ").strip()
-        if is_valid_vote(choice, pair_options, my_pair):
-            return int(choice)
-        print("That's not a valid pair, try again.")
+        text = input(f"Rank the pairs, most wanted out first, e.g. {', '.join(map(str, allowed))}: ")
+        ranking = parse_ranking(text)
+
+        # Listed all but one? Fill in the last one for them.
+        if ranking and len(ranking) == len(allowed) - 1:
+            missing = [p for p in allowed if p not in ranking]
+            if len(missing) == 1:
+                ranking.append(missing[0])
+
+        if is_valid_ranking(ranking, pair_options, my_pair):
+            return ranking
+        print(f"List each of these pairs once, in order: {allowed}. Try again.")
 
 
 if __name__ == "__main__":
