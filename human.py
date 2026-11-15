@@ -14,13 +14,13 @@ from agents import SHOW_NAMES
 
 HUMAN_NAME = "You"
 
-# Flip to True once ranked agent_vote() is pushed. Counter
+# Flip to True once Julia's ranked agent_vote() is pushed. Bella's counter
 # needs every ballot in a round to use the same format (all numbers or all lists).
-RANKED_VOTES = True
+RANKED_VOTES = False
 
 
 def show_name(role):
-    """Role key -> name the player sees. "You" stays "You"."""
+    """Role key -> name the player sees ("Villain" -> "Selena", "You" -> the name you picked)."""
     return SHOW_NAMES.get(role, role)
 
 
@@ -34,6 +34,47 @@ def role_from_show_name(typed, players):
         if show_name(role).lower() == typed:
             return role
     return None
+
+
+# ---------- player name (so the AIs can't tell who the human is) ----------
+
+MAX_NAME_LENGTH = 15
+
+
+def is_valid_player_name(name):
+    """Letters (plus spaces, - or '), 15 characters max, and not already taken."""
+    name = name.strip()
+    taken = {n.lower() for role, n in SHOW_NAMES.items() if role != HUMAN_NAME}
+    taken |= {role.lower() for role in SHOW_NAMES}  # role names would leak roles
+    taken |= {"you", "caesar"}
+    return (
+        0 < len(name) <= MAX_NAME_LENGTH
+        and name[0].isalpha()
+        and all(c.isalpha() or c in " -'" for c in name)
+        and name.lower() not in taken
+    )
+
+
+def set_player_name(name):
+    """Show the player under this name everywhere (transcript, pairs, host).
+
+    The code still uses "You" as the player's key; only the displayed name changes.
+    SHOW_NAMES is shared with agents.py, host.py and game.py, so this updates all of them.
+    """
+    SHOW_NAMES[HUMAN_NAME] = name.strip()
+
+
+def human_pick_name():
+    """Ask the player what name to use on the show. Call once, before intros."""
+    while True:
+        name = input("What's your name on the show? ")
+        if is_valid_player_name(name):
+            set_player_name(name)
+            return name.strip()
+        print(
+            f"Pick a different name: letters only, up to {MAX_NAME_LENGTH} characters, "
+            "and not another contestant's name."
+        )
 
 
 def format_pair(pair):
@@ -56,6 +97,7 @@ def is_valid_vote(choice, pair_options, my_pair):
     """Vote must be a pair number on the ballot, and not your own pair."""
     return choice.isdigit() and int(choice) in pair_options and int(choice) != my_pair
 
+
 def parse_ranking(text):
     """ "2, 0" or "2 0" -> [2, 0]. Returns None if it isn't all numbers."""
     parts = text.replace(",", " ").split()
@@ -72,6 +114,7 @@ def is_valid_ranking(ranking, pair_options, my_pair):
         and len(ranking) == len(allowed)
         and set(ranking) == set(allowed)
     )
+
 
 # ---------- turns (these ask you to type) ----------
 
@@ -141,7 +184,14 @@ if __name__ == "__main__":
     players = ["You", "Charmer", "Villain", "Loyalist", "Observer", "Chaos Agent"]
     pairs = [("You", "Charmer"), ("Villain", "Loyalist"), ("Observer", "Chaos Agent")]
 
+    name = human_pick_name()
+    print(f"You're on the show as {show_name('You')}")
     print("You said:", human_speak())
     partner = human_pick_partner(players)
     print(f"Partner: {show_name(partner)} (role key for the code: {partner})")
     print("Voted for pair:", human_vote([0, 1, 2], my_pair=0, pairs=pairs))
+
+    print("\n--- Ranked voting test (4 pairs, you're in pair 0) ---")
+    RANKED_VOTES = True
+    pairs.append(("Paranoid", "Strategist"))
+    print("Your ranking:", human_vote([0, 1, 2, 3], my_pair=0, pairs=pairs))
